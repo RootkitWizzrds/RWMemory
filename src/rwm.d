@@ -1,32 +1,34 @@
 import core.sys.windows.windows;
-import core.sys.windows.psapi;
 import core.sys.windows.winbase;
-import core.stdc.stdlib : malloc, free;
-import core.stdc.string : memcpy;
-import core.memory : GC;
-import std.conv : to;
-import std.exception : enforce;
-import std.string : format;
-import std.typecons : Nullable;
+import core.sys.windows.windef;
+import core.sys.windows.winnt;
 import std.string : toStringz;
-import std.format : format;
-import std.algorithm : findSplit;
+import std.exception : enforce;
+import std.conv : to;
+
+extern(Windows) {
+    LONG NtReadVirtualMemory(
+        HANDLE ProcessHandle,
+        const(void)* BaseAddress,
+        void* Buffer,
+        ULONG NumberOfBytesToRead,
+        ULONG* NumberOfBytesRead
+    );
+
+    LONG NtWriteVirtualMemory(
+        HANDLE ProcessHandle,
+        void* BaseAddress,
+        const(void)* Buffer,
+        ULONG NumberOfBytesToWrite,
+        ULONG* NumberOfBytesWritten
+    );
+}
 
 class AdvancedMemory {
     private:
-        void* memBlock;
-        size_t size;
-        Nullable!string description;
         HANDLE hProcess = null;
 
     public:
-        this(size_t size, Nullable!string description = Nullable!string.init) {
-            this.size = size;
-            this.memBlock = malloc(size);
-            this.description = description;
-            enforce(this.memBlock !is null, "Memory allocation failed");
-        }
-
         this(string processName) {
             DWORD pid = getPIDByName(processName);
             enforce(pid != 0, "Failed to find process PID");
@@ -35,10 +37,6 @@ class AdvancedMemory {
         }
 
         ~this() {
-            if (this.memBlock !is null) {
-                free(this.memBlock);
-                this.memBlock = null;
-            }
             if (this.hProcess !is null) {
                 CloseHandle(this.hProcess);
             }
@@ -70,31 +68,37 @@ class AdvancedMemory {
 
         void writeProcessMemory(T)(size_t address, T value) {
             enforce(this.hProcess !is null, "No process handle");
-            enforce(WriteProcessMemory(this.hProcess, cast(void*)address, &value, T.sizeof, null), "Failed to write memory");
+            ULONG bytesWritten;
+            enforce(
+                NtWriteVirtualMemory(
+                    this.hProcess,
+                    cast(void*)address,
+                    &value,
+                    T.sizeof,
+                    &bytesWritten
+                ) == 0, "Failed to write memory"
+            );
         }
 
         T readProcessMemory(T)(size_t address) {
             enforce(this.hProcess !is null, "No process handle");
             T value;
-            enforce(ReadProcessMemory(this.hProcess, cast(void*)address, &value, T.sizeof, null), "Failed to read memory");
+            ULONG bytesRead;
+            enforce(
+                NtReadVirtualMemory(
+                    this.hProcess,
+                    cast(void*)address,
+                    &value,
+                    T.sizeof,
+                    &bytesRead
+                ) == 0, "Failed to read memory"
+            );
             return value;
-        }
-
-        void* getPointer() const {
-            return this.memBlock;
-        }
-
-        size_t getSize() const {
-            return this.size;
-        }
-        
-        string getDescription() const {
-            return this.description.isNull ? "No description" : this.description.get;
         }
 }
 
 void main() {
-    auto mem = new AdvancedMemory("notepad.exe"); // Automatically attaches to the proccess 
+    auto mem = new AdvancedMemory("notepad.exe");
     int newValue = 12345;
     mem.writeProcessMemory!int(0x7FF6345A0000, newValue);
     int readValue = mem.readProcessMemory!int(0x7FF6345A0000);
